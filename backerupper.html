@@ -100,7 +100,7 @@
 
         async function runGlobalBackup() {
             const status = document.getElementById('backup-status');
-            status.innerText = "Processing 600MB+ data... please wait...";
+            status.innerText = "Processing data... please wait...";
             try {
                 const data = await getAllData();
                 const json = JSON.stringify(data);
@@ -108,7 +108,7 @@
                 const blob = new Blob([json], {type: "application/json"});
                 const a = document.createElement('a');
                 a.href = URL.createObjectURL(blob);
-                a.download = `laggy_file_{new Date().getTime()}.json`;
+                a.download = `laggy_file_${new Date().getTime()}.json`;
                 a.click();
                 status.innerText = "Backup complete!";
             } catch (e) {
