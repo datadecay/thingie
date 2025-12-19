@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Game Save Manager</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; line-height: 1.6; max-width: 600px; margin: auto; background-color: #f4f4f9; }
+        .card { border: 1px solid #ddd; padding: 20px; border-radius: 10px; background: white; margin-bottom: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        h2, h3 { color: #333; margin-top: 0; }
+        button { background: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-weight: bold; }
+        button:hover { background: #0056b3; }
+        .restore-btn { background: #28a745; }
+        .restore-btn:hover { background: #218838; }
+        pre { background: #f8f8f8; padding: 10px; border: 1px inset #ccc; max-height: 150px; overflow-y: auto; font-size: 11px; }
+        input[type="file"] { margin-bottom: 15px; display: block; }
+    </style>
+</head>
+<body>
+
+    <h2>Game Save Manager</h2>
+
+    <div class="card">
+        <h3>1. Export</h3>
+        <p>Save your current progress to a local file</p>
+        <pre id="data-preview">No local data found.</pre>
+        <button onclick="downloadBackup()">Download</button>
+    </div>
+
+    <div class="card">
+        <h3>2. Restore</h3>
+        <p>Upload your amazing json file</p>
+        <input type="file" id="file-input" accept=".json">
+        <button class="restore-btn" onclick="restoreBackup()"> Restore</button>
+    </div>
+
+    <script>
+        function getSaveData() {
+            const backup = {};
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                backup[key] = localStorage.getItem(key);
+            }
+            return backup;
+        }
+
+        function updatePreview() {
+            const data = getSaveData();
+            const preview = document.getElementById('data-preview');
+            if (Object.keys(data).length > 0) {
+                preview.textContent = JSON.stringify(data, null, 2);
+            }
+        }
+
+        function downloadBackup() {
+            const data = getSaveData();
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(data));
+            const downloadAnchorNode = document.createElement('a');
+            downloadAnchorNode.setAttribute("href", dataStr);
+            downloadAnchorNode.setAttribute("download", "save_data_" + new Date().getTime() + ".json");
+            document.body.appendChild(downloadAnchorNode);
+            downloadAnchorNode.click();
+            downloadAnchorNode.remove();
+        }
+
+        function restoreBackup() {
+            const fileInput = document.getElementById('file-input');
+            if (fileInput.files.length === 0) {
+                alert("Please select a file first.");
+                return;
+            }
+
+            const file = fileInput.files[0];
+            const reader = new FileReader();
+
+            reader.onload = function(e) {
+                try {
+                    const importedData = JSON.parse(e.target.result);
+                    
+                    if (confirm("This will overwrite your current data. Continue?")) {
+                        localStorage.clear();
+                        for (const key in importedData) {
+                            localStorage.setItem(key, importedData[key]);
+                        }
+                        alert("Restore successful hopefully!");
+                        updatePreview();
+                    }
+                } catch (err) {
+                    alert("Error: The file is not a valid JSON save.");
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        updatePreview();
+    </script>
+</body>
+</html>
