@@ -8,7 +8,7 @@
         button { cursor: pointer; padding: 10px 20px; border: none; border-radius: 6px; font-weight: bold; color: white; transition: 0.2s; }
         .btn-backup { background: #007bff; }
         .btn-restore { background: #28a745; }
-        pre { background: #272822; color: #f8f8f2; padding: 15px; border-radius: 8px; overflow: auto; max-height: 300px; font-size: 12px; }
+        pre { background: #272822; color: #f8f8f2; padding: 15px; border-radius: 8px; overflow: auto; max-height: 300px; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
         .status { font-weight: bold; color: #555; }
         .progress-container { width: 100%; background-color: #ddd; border-radius: 4px; margin-top: 10px; display: none; }
         #progress-bar { width: 0%; height: 20px; background-color: #28a745; border-radius: 4px; text-align: center; line-height: 20px; color: white; font-size: 12px; }
@@ -18,7 +18,7 @@
 
     <div class="card">
         <h2>Create Backup</h2>
-        <p>Backup EVERYTHING (but httponly cookies gah)</p>
+        <p>Downloads full JSON (can get humungous)</p>
         <button class="btn-backup" onclick="runGlobalBackup()">Download</button>
         <p class="status" id="backup-status"></p>
     </div>
@@ -35,11 +35,36 @@
 
     <div class="card">
         <h3>Data Preview</h3>
-        <h4>this can get KINDA big!</h4>
         <pre id="preview">Ready</pre>
     </div>
 
     <script>
+        const decoder = new TextDecoder();
+        const encoder = new TextEncoder();
+
+        function smartDecode(item) {
+            if (Array.isArray(item) && item.length > 0 && typeof item[0] === 'number') {
+                try {
+                    return decoder.decode(new Uint8Array(item));
+                } catch (e) { return item; }
+            }
+            if (item instanceof Uint8Array) return decoder.decode(item);
+            return item;
+        }
+
+        async function blobToBase64(blob) {
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result);
+                reader.readAsDataURL(blob);
+            });
+        }
+
+        async function base64ToBlob(base64) {
+            const res = await fetch(base64);
+            return await res.blob();
+        }
+
         async function getAllData() {
             const data = { localStorage: {}, cookies: {}, indexedDB: {} };
             for (let i = 0; i < localStorage.length; i++) {
@@ -69,9 +94,14 @@
                     if (stores.length === 0) { db.close(); return resolve(dump); }
                     const tx = db.transaction(stores, "readonly");
                     for (const s of stores) {
-                        dump[s] = await new Promise(res => {
-                            tx.objectStore(s).getAll().onsuccess = e => res(e.target.result);
+                        const store = tx.objectStore(s);
+                        const records = await new Promise(r => {
+                            store.getAll().onsuccess = e => r(e.target.result);
                         });
+                        dump[s] = await Promise.all(records.map(async item => {
+                            if (item instanceof Blob) return { _isBlob: true, data: await blobToBase64(item), type: item.type };
+                            return item;
+                        }));
                     }
                     db.close();
                     resolve(dump);
@@ -80,46 +110,53 @@
         }
 
         async function runGlobalBackup() {
-            document.getElementById('backup-status').innerText = "Scanning... check preview below.";
+            const status = document.getElementById('backup-status');
+            const preview = document.getElementById('preview');
+            status.innerText = "Encoding data...";
             const data = await getAllData();
-            document.getElementById('preview').textContent = JSON.stringify(data, null, 2);
+            
+            const displayData = JSON.parse(JSON.stringify(data));
+            for (let db in displayData.indexedDB) {
+                for (let store in displayData.indexedDB[db]) {
+                    if (store === '_version') continue;
+                    displayData.indexedDB[db][store] = displayData.indexedDB[db][store].map(item => {
+                        if (item && item.contents) item.contents = smartDecode(item.contents);
+                        return item;
+                    });
+                }
+            }
+
+            preview.textContent = JSON.stringify(displayData, null, 2);
             const blob = new Blob([JSON.stringify(data)], {type: "application/json"});
-            const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
-            a.href = url;
-            a.download = `full_backup_${new Date().getTime()}.json`;
+            a.href = URL.createObjectURL(blob);
+            a.download = `unity_ascii_backup_${new Date().getTime()}.json`;
             a.click();
-            document.getElementById('backup-status').innerText = "Backup complete!";
+            status.innerText = "Complete!";
         }
 
         async function runGlobalRestore() {
             const file = document.getElementById('import-file').files[0];
-            if (!file) return alert("Select a file first!");
+            if (!file) return alert("Select file!");
             const reader = new FileReader();
             reader.onload = async (e) => {
                 const data = JSON.parse(e.target.result);
-                if (!confirm("This will erase current data and replace it. Continue?")) return;
-                
+                if (!confirm("Overwrite EVERYTHING?")) return;
                 document.getElementById('p-cont').style.display = 'block';
                 const pBar = document.getElementById('progress-bar');
-
+                
                 localStorage.clear();
                 for (let k in data.localStorage) localStorage.setItem(k, data.localStorage[k]);
                 for (let k in data.cookies) document.cookie = `${k}=${encodeURIComponent(data.cookies[k])}; path=/; max-age=31536000`;
 
-                if (data.indexedDB) {
-                    const dbNames = Object.keys(data.indexedDB);
-                    for (let i = 0; i < dbNames.length; i++) {
-                        const name = dbNames[i];
-                        const dbData = data.indexedDB[name];
-                        await restoreIDB(name, dbData);
-                        let progress = Math.round(((i + 1) / dbNames.length) * 100);
-                        pBar.style.width = progress + '%';
-                        pBar.innerText = progress + '%';
-                    }
+                const dbs = Object.keys(data.indexedDB);
+                for (let i = 0; i < dbs.length; i++) {
+                    await restoreIDB(dbs[i], data.indexedDB[dbs[i]]);
+                    let p = Math.round(((i + 1) / dbs.length) * 100);
+                    pBar.style.width = p + '%';
+                    pBar.innerText = p + '%';
                 }
-
-                alert("Restore finished! Page will reload.");
+                alert("Restored successfully!");
                 location.reload();
             };
             reader.readAsText(file);
@@ -127,26 +164,26 @@
 
         async function restoreIDB(name, data) {
             return new Promise((resolve) => {
-                const version = data._version || 1;
-                const req = indexedDB.open(name, version);
+                const req = indexedDB.open(name, data._version || 1);
                 req.onupgradeneeded = (e) => {
                     const db = e.target.result;
                     for (const sName in data) {
-                        if (sName !== '_version' && !db.objectStoreNames.contains(sName)) {
-                            db.createObjectStore(sName, { autoIncrement: true });
-                        }
+                        if (sName !== '_version' && !db.objectStoreNames.contains(sName)) db.createObjectStore(sName, { autoIncrement: true });
                     }
                 };
-                req.onsuccess = (e) => {
+                req.onsuccess = async (e) => {
                     const db = e.target.result;
                     const stores = Object.keys(data).filter(k => k !== '_version');
-                    if (stores.length === 0) { db.close(); return resolve(); }
+                    if (!stores.length) { db.close(); return resolve(); }
                     const tx = db.transaction(stores, "readwrite");
-                    stores.forEach(sName => {
+                    for (const sName of stores) {
                         const store = tx.objectStore(sName);
                         store.clear();
-                        data[sName].forEach(item => store.add(item));
-                    });
+                        for (let item of data[sName]) {
+                            if (item && item._isBlob) item = await base64ToBlob(item.data);
+                            store.add(item);
+                        }
+                    }
                     tx.oncomplete = () => { db.close(); resolve(); };
                 };
             });
