@@ -8,7 +8,7 @@
         button { cursor: pointer; padding: 10px 20px; border: none; border-radius: 6px; font-weight: bold; color: white; transition: 0.2s; }
         .btn-backup { background: #007bff; }
         .btn-restore { background: #28a745; }
-        pre { background: #272822; color: #f8f8f2; padding: 15px; border-radius: 8px; overflow: auto; max-height: 300px; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+        pre { background: #272822; color: #f8f8f2; padding: 15px; border-radius: 8px; overflow: auto; max-height: 300px; font-size: 12px; }
         .status { font-weight: bold; color: #555; }
         .progress-container { width: 100%; background-color: #ddd; border-radius: 4px; margin-top: 10px; display: none; }
         #progress-bar { width: 0%; height: 20px; background-color: #28a745; border-radius: 4px; text-align: center; line-height: 20px; color: white; font-size: 12px; }
@@ -18,7 +18,7 @@
 
     <div class="card">
         <h2>Create Backup</h2>
-        <p>Downloads full JSON (can get humungous)</p>
+        <p>Backup EVERYTHING (but httponly cookies gah)</p>
         <button class="btn-backup" onclick="runGlobalBackup()">Download</button>
         <p class="status" id="backup-status"></p>
     </div>
@@ -35,23 +35,11 @@
 
     <div class="card">
         <h3>Data Preview</h3>
+        <h4>this can get KINDA big!</h4>
         <pre id="preview">Ready</pre>
     </div>
 
     <script>
-        const decoder = new TextDecoder();
-        const encoder = new TextEncoder();
-
-        function smartDecode(item) {
-            if (Array.isArray(item) && item.length > 0 && typeof item[0] === 'number') {
-                try {
-                    return decoder.decode(new Uint8Array(item));
-                } catch (e) { return item; }
-            }
-            if (item instanceof Uint8Array) return decoder.decode(item);
-            return item;
-        }
-
         async function blobToBase64(blob) {
             return new Promise((resolve) => {
                 const reader = new FileReader();
@@ -95,10 +83,11 @@
                     const tx = db.transaction(stores, "readonly");
                     for (const s of stores) {
                         const store = tx.objectStore(s);
-                        const records = await new Promise(r => {
-                            store.getAll().onsuccess = e => r(e.target.result);
+                        const allRecords = await new Promise(res => {
+                            store.getAll().onsuccess = e => res(e.target.result);
                         });
-                        dump[s] = await Promise.all(records.map(async item => {
+                        
+                        dump[s] = await Promise.all(allRecords.map(async item => {
                             if (item instanceof Blob) return { _isBlob: true, data: await blobToBase64(item), type: item.type };
                             return item;
                         }));
@@ -111,28 +100,21 @@
 
         async function runGlobalBackup() {
             const status = document.getElementById('backup-status');
-            const preview = document.getElementById('preview');
-            status.innerText = "Encoding data...";
-            const data = await getAllData();
-            
-            const displayData = JSON.parse(JSON.stringify(data));
-            for (let db in displayData.indexedDB) {
-                for (let store in displayData.indexedDB[db]) {
-                    if (store === '_version') continue;
-                    displayData.indexedDB[db][store] = displayData.indexedDB[db][store].map(item => {
-                        if (item && item.contents) item.contents = smartDecode(item.contents);
-                        return item;
-                    });
-                }
+            status.innerText = "Processing 600MB+ data... please wait...";
+            try {
+                const data = await getAllData();
+                const json = JSON.stringify(data);
+                document.getElementById('preview').textContent = json.substring(0, 1000) + "... (truncated)";
+                const blob = new Blob([json], {type: "application/json"});
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = `laggy_file_{new Date().getTime()}.json`;
+                a.click();
+                status.innerText = "Backup complete!";
+            } catch (e) {
+                status.innerText = "Error: Backup too large for browser memory.";
+                console.error(e);
             }
-
-            preview.textContent = JSON.stringify(displayData, null, 2);
-            const blob = new Blob([JSON.stringify(data)], {type: "application/json"});
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = `unity_ascii_backup_${new Date().getTime()}.json`;
-            a.click();
-            status.innerText = "Complete!";
         }
 
         async function runGlobalRestore() {
@@ -156,7 +138,7 @@
                     pBar.style.width = p + '%';
                     pBar.innerText = p + '%';
                 }
-                alert("Restored successfully!");
+                alert("Done! Reloading...");
                 location.reload();
             };
             reader.readAsText(file);
